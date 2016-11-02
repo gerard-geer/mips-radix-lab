@@ -9,7 +9,7 @@
 
 # STATIC DATA DEFINITIONS =====================================================
 	.data
-# No data yet.
+stored_at: .asciiz " stored at: "
 
 # PROCEDURE DEFINITION ========================================================
 	.text 
@@ -22,12 +22,52 @@
 #	None
 #------------------------------------------------------------------------------
 main:
+	# Tests get binary digit, by getting bit 2 (third digit) of 6.
+	# This should print out 1.
+	li $a0, 6				# Load 6.
+	li $a1, 2				# Hey get the second digit.
+	jal get_binary_digit	# Do the function call.
+	add $a0, $zero, $v0		# Move the output of the func into the arg.
+	li $v0, 1				# Tell the system we're printing an int.
+	syscall					# Actually perform the syscall.
+	li $a0, ' '				# This just prints a character for spacing.
+	li $v0, 11
+	syscall
 
-	# Create 5 buckets of length 5 on the heap. This is just to test the
-	# function. 
-	li $a1, 5
+	# Create 2 buckets of length 8 on the heap. This is just to test the
+	# function. Look at the "heap" section of memory to verify.
+	li $a1, 2
 	li $a2, 8
 	jal create_buckets
+	
+	# Store pointers to the LUTs made by create_buckets.
+	add $s0, $zero, $v0
+	add $s1, $zero, $v1
+
+	# Tests insert_into_bucket. Again, look at the heap to verify.
+	addi $s2, $zero, 10		# Create a value we want to insert. (10 = 0b1010)
+	add $a0, $zero, $s0		# A pointer to the update-intended LUT.
+	addi $a1, $zero, 2		# The number of buckets we created.
+	add $a2, $zero, $s2		# The value to insert.
+	addi $a3, $zero, 0		# The digit to insert with respect to.
+	jal insert_into_bucket
+
+	# Store where the value was inserted.
+	add $t0, $zero, $v0		# We don't care if this result is overwritten
+							# since we never use it again.
+
+	# Print out info about it.
+	li $v0, 34
+	add $a0, $zero, $s2
+	syscall
+	li $v0, 4
+	la $a0, stored_at
+	syscall
+	li $v0, 34
+	add $a0, $zero, $t0
+	syscall
+
+	
 
 	# Exit.
 	li $v0, 10
@@ -60,7 +100,7 @@ get_binary_digit:
 
 #------------------------------------------------------------------------------
 # Function: create_buckets
-# Creates <n> buckets of <m> size. Stores two atlases of their positions in
+# Creates <n> buckets of <m> size. Stores two LUTs of their positions in
 # memory: One for location purposes, and the other for incrementing to the
 # next available position purposes.
 #
@@ -73,7 +113,7 @@ get_binary_digit:
 #	v1: The second location table.
 #------------------------------------------------------------------------------
 create_buckets:
-	# Create the first of the two atlases.
+	# Create the first of the two LUTs.
 	addi $v0, $zero, 9
 	# Set the required size to enough bytes for a word-length pointer to
 	# each bucket.
@@ -83,7 +123,7 @@ create_buckets:
 	# Schindler's list the pointer into $t0 so we don't overwrite it.
 	add $t0, $zero, $v0
 
-	# Second atlas. Since $v0 was written to, we have to reload the value.
+	# Second LUT. Since $v0 was written to, we have to reload the value.
 	addi $v0, $zero, 9 
 	syscall	# We don't need to re-write to $a0
 	add $t1, $zero, $v0	
@@ -106,25 +146,26 @@ create_buckets:
 		addi $v0, $zero, 9
 		syscall
 		
-		# Add the address to the atlases, and increment them.
+		# Add the address to the LUTs, and increment them.
 		sw $v0, ($t0)
-		sw $v0, ($t1)
+		sw $v1, ($t1)
 		addi $t0, $t0, 4
 		addi $t1, $t1, 4
 
 		# Increment the counter.
 		addi $t2, $t2, 1
+
 	# On the next episode of Bucket Creation Loop, we do the same darn thing!
 	# Oh did I say Bucket Creation Loop? I meant to say MGSV.
 	j bucket_creation_loop
 
 	return_create_buckets: # Fly out of the loop? You'll land here.
-	# Now that the atlases are created, we need to return the pointers to
-	# the start. Oh, and since we don't need $a2 anymore, we can just use
+	# Now that the LUTs are created, we need to return the pointers to
+	# the start. Oh, and since we don't need $a1 anymore, we can just use
 	# it.
-	mul $a2, $a2, 4
-	sub $v0, $t0, $a2 # Put these things into the return registers.
-	sub $v1, $t1, $a2
+	mul $a1, $a1, 4
+	sub $v0, $t0, $a1 # Put these things into the return registers.
+	sub $v1, $t1, $a1
 	
 	# Return.
 	jr $ra
@@ -132,10 +173,10 @@ create_buckets:
 #------------------------------------------------------------------------------
 # Function: insert_into_bucket
 # Takes a value, a particular digit to consider from it, a pointer to an
-# atlas of bucket pointers, and how many buckets there are. With this data
+# LUT of bucket pointers, and how many buckets there are. With this data
 # this function inserts the value into the correct bucket.
 # Parameters:
-#	a0: A pointer to the read-write bucket atlas.
+#	a0: A pointer to the read-write bucket LUT.
 #	a1: How many buckets there are.
 #	a2: The value to insert.
 #	a3: The digit to insert in respect to.
@@ -165,19 +206,27 @@ insert_into_bucket:
 	lw $ra, 0($sp)
 	addi $sp, $sp, 12
 	
-
-	# Multiply that digit by 4 to get an offset into the atlas.
+	# Multiply the digit we just got by 4 to get an offset into the LUT.
 	mul $t0, $t0, 4
-	# Since we can't offset by a register value, we need to prepare
-	# an address ourselves.
+
+	# Since we can't offset into the LUT by a register value, we need to prepare
+	# the offset ourselves. This adds the value of the digit we extracted
+	# to the starting address of the LUT.
 	add $t0, $t0, $a0
-	# Get the address from the atlas.
+
+	# Get the address of the bucket itself from the LUT.
 	lw $t1, ($t0)
+
 	# Store the value at that address.
 	sw $a2, ($t1)
+
+	# Put the address of where the value was stored into the result register.
+	add $v0, $zero, $t1
+
 	# Increment the pointer to the bucket so it points to its next slot.
-	addi $t1, $t1, 4	# Four bytes = one word.
-	# Update the atlas with the new address.
+	addi $t1, $t1, 4
+
+	# Update the LUT with the new address.
 	sw $t1, ($t0)
 
 	# Finally we can get out of this function.
